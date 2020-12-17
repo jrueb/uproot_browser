@@ -12,3 +12,9 @@ If you're on Linux you can add the starter to your menu for quick access
 
 > ./install_starter.sh
 
+
+## Running
+
+Simply start the application with
+
+> python3 uproot_browser.py
