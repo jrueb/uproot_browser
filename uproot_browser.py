@@ -171,9 +171,13 @@ class Browser(Gtk.ApplicationWindow):
             self.plot_ax.plot(obj.all_members["fX"], obj.all_members["fY"])
             self.plot_ax.set_title(obj.all_members["fTitle"])
             canplot = True
-        elif obj.classname in ["TGraphAsymmErrors"]:
-            xerr = np.array([obj.all_members["fEXlow"], obj.all_members["fEXhigh"]])
-            yerr = np.array([obj.all_members["fEYlow"], obj.all_members["fEYhigh"]])
+        elif obj.classname in ["TGraphErrors", "TGraphAsymmErrors"]:
+            if "Asymm" in obj.classname:
+                xerr = np.array([obj.all_members["fEXlow"], obj.all_members["fEXhigh"]])
+                yerr = np.array([obj.all_members["fEYlow"], obj.all_members["fEYhigh"]])
+            else:
+                xerr = obj.all_members["fEX"]
+                yerr = obj.all_members["fEY"]
             self.plot_ax.errorbar(x=obj.all_members["fX"], y=obj.all_members["fY"], xerr=xerr, yerr=yerr, linestyle="none")
             self.plot_ax.set_title(obj.all_members["fTitle"])
             canplot = True
