@@ -2,9 +2,12 @@
 
 import gi
 gi.require_version("Gtk", "3.0")
-from gi.repository import Gtk, Gio
+from gi.repository import Gtk, Gio, Gdk
 import os
-import awkward
+import threading
+from functools import partial
+import queue
+import awkward as ak
 import uproot
 import warnings
 with warnings.catch_warnings():
@@ -15,7 +18,6 @@ from matplotlib.backends.backend_gtk3 import (
     NavigationToolbar2GTK3 as NavigationToolbar)
 from matplotlib.figure import Figure
 import numpy as np
-import argparse
 import sys
 from collections import Mapping
 
@@ -27,10 +29,17 @@ class Browser(Gtk.ApplicationWindow):
     PAGE_PLOT = 0
     PAGE_INSPECT = 1
 
+    NUM_TBRANCH_FASTLOAD = 100000
+
     def __init__(self, app, file=None):
         Gtk.ApplicationWindow.__init__(self, application=app)
         self.set_default_size(750, 600)
         self.set_border_width(10)
+
+        self.load_queue = queue.Queue()
+        self.load_thread = threading.Thread(target=self.load_if_available)
+        self.load_thread.daemon = True
+        self.load_thread.start()
 
         self.store = Gtk.TreeStore(str, bool)
         self.file = file
@@ -73,16 +82,33 @@ class Browser(Gtk.ApplicationWindow):
         self.notebook = Gtk.Notebook()
         paned.pack2(self.notebook, True, True)
 
-        box = Gtk.Box.new(Gtk.Orientation.VERTICAL, 0)
-        self.notebook.append_page(box, Gtk.Label.new("Plot"))
-        self.notebook.child_set_property(box, "tab-expand", True)
+        overlay = Gtk.Overlay.new()
+        tab_box = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 0)
+        self.plot_spinner = Gtk.Spinner()
+        tab_box.pack_start(self.plot_spinner, False, False, 0)
+        tab_box.pack_start(Gtk.Label.new("Plot"), True, True, 0)
+        tab_box.show_all()
+        self.notebook.append_page(overlay, tab_box)
+        self.notebook.child_set_property(overlay, "tab-expand", True)
 
-        canvas = FigureCanvas(Figure(figsize=(5, 4)))
-        box.pack_start(canvas, True, True, 0)
-        self.plot_ax = canvas.figure.subplots()
+        self.plot_infobar = Gtk.InfoBar.new()
+        self.plot_infobar.set_show_close_button(True)
+        self.plot_infobar_cbs = []
+        self.plot_infobar.connect("response", self.plot_infobar_response)
+        self.plot_infobar.set_property("valign", Gtk.Align.START)
+        self.plot_infobar.set_revealed(False)
+        self.plot_infobar.label = Gtk.Label.new("")
+        self.plot_infobar.get_content_area().add(self.plot_infobar.label)
+        overlay.add_overlay(self.plot_infobar)
+
+        box = Gtk.Box.new(Gtk.Orientation.VERTICAL, 0)
+        overlay.add(box)
+        self.plot_canvas = FigureCanvas(Figure(figsize=(5, 4)))
+        box.pack_start(self.plot_canvas, True, True, 0)
+        self.plot_ax = self.plot_canvas.figure.subplots()
         self.colorbar = None
 
-        self.toolbar = NavigationToolbar(canvas, self)
+        self.toolbar = NavigationToolbar(self.plot_canvas, self)
         box.pack_start(self.toolbar, False, False, 0)
 
         scroll = Gtk.ScrolledWindow()
@@ -161,16 +187,19 @@ class Browser(Gtk.ApplicationWindow):
             self.store.append(iter, [key, True])
 
     def plot(self, obj):
+        self.plot_canvas.hide()
+        self.plot_spinner.start()
         self.plot_ax.clear()
         if self.colorbar is not None:
             self.colorbar.remove()
             self.colorbar = None
+        canplot = True
+        should_update = True
         if not hasattr(obj, "classname"):
             canplot = False
         elif obj.classname in ["TGraph"]:
             self.plot_ax.plot(obj.all_members["fX"], obj.all_members["fY"])
             self.plot_ax.set_title(obj.all_members["fTitle"])
-            canplot = True
         elif obj.classname in ["TGraphErrors", "TGraphAsymmErrors"]:
             if "Asymm" in obj.classname:
                 xerr = np.array([obj.all_members["fEXlow"], obj.all_members["fEXhigh"]])
@@ -180,7 +209,6 @@ class Browser(Gtk.ApplicationWindow):
                 yerr = obj.all_members["fEY"]
             self.plot_ax.errorbar(x=obj.all_members["fX"], y=obj.all_members["fY"], xerr=xerr, yerr=yerr, linestyle="none")
             self.plot_ax.set_title(obj.all_members["fTitle"])
-            canplot = True
         elif obj.classname in ["TH1D", "TH1F", "TH1I", "TH1S", "TH1C"]:
             edges = obj.axis().edges()
             values = obj.values()
@@ -191,7 +219,6 @@ class Browser(Gtk.ApplicationWindow):
             self.plot_ax.set_xlabel(obj.all_members["fXaxis"].all_members["fTitle"])
             self.plot_ax.set_ylabel(obj.all_members["fYaxis"].all_members["fTitle"])
             self.plot_ax.set_title(obj.all_members["fTitle"])
-            canplot = True
         elif obj.classname in ["TH2D", "TH2F", "TH2I", "TH2S", "TH2C"]:
             edgesx = obj.axis(0).edges()
             edgesy = obj.axis(1).edges()
@@ -203,21 +230,71 @@ class Browser(Gtk.ApplicationWindow):
             self.plot_ax.set_title(obj.all_members["fTitle"])
             self.colorbar = self.plot_ax.figure.colorbar(c)
             self.colorbar.set_label(obj.all_members["fZaxis"].all_members["fTitle"])
-            canplot = True
         elif obj.classname in ["TBranch"]:
-            data = awkward.to_numpy(awkward.flatten(obj.array(), None))
-            data = data[np.isfinite(data)]
-            self.plot_ax.hist(data, bins=50)
-            self.plot_ax.set_xlabel(obj.name)
-            self.plot_ax.set_ylabel("Counts")
-            canplot = True
+            self.load_queue.put((obj, {"entry_stop": self.NUM_TBRANCH_FASTLOAD}, self.finish_tbranch_plot))
+            should_update = False
         else:
             print(obj.classname)
             canplot = False
-        self.plot_ax.figure.canvas.draw()
+        if should_update:
+            self.update_plot_tab()
+        return canplot
+
+    def update_plot_tab(self):
+        self.plot_canvas.figure.tight_layout()
+        self.plot_canvas.draw()
         # Remind the toolbar about the new axis limits
         self.toolbar.update()
-        return canplot
+        if self.load_queue.empty():
+            self.plot_spinner.stop()
+        self.plot_canvas.show()
+
+    def load_if_available(self):
+        while True:
+            obj, array_kwargs, cb = self.load_queue.get()
+            data = obj.array(**array_kwargs)
+            data = np.asarray(ak.flatten(data, None))
+            data = data[np.isfinite(data)]
+            self.load_queue.task_done()
+            Gdk.threads_add_idle(0, cb, obj, array_kwargs, data)
+
+    def finish_tbranch_plot(self, obj, array_kwargs, data):
+        if data.dtype == bool:
+            data = data.astype(int)
+        self.plot_ax.hist(data, bins=50)
+        self.plot_ax.set_xlabel(obj.name)
+        self.plot_ax.set_ylabel("Counts")
+        self.update_plot_tab()
+        if "entry_stop" in array_kwargs and array_kwargs["entry_stop"] < obj.num_entries:
+            self.show_plot_info_message(
+                f"Only showing {array_kwargs['entry_stop']} out of {obj.num_entries} rows",
+                {"Load all": partial(self.plot_entire_tbranch, obj)})
+
+    def plot_entire_tbranch(self, obj):
+        self.plot_canvas.hide()
+        self.plot_spinner.start()
+        self.plot_ax.clear()
+        if self.colorbar is not None:
+            self.colorbar.remove()
+            self.colorbar = None
+        self.load_queue.put((obj, {}, self.finish_tbranch_plot))
+
+    def show_plot_info_message(self, text, buttons):
+        self.plot_infobar.label.set_text(text)
+        buttonbox = self.plot_infobar.get_action_area()
+        for button in buttonbox.get_children():
+            buttonbox.remove(button)
+        self.plot_infobar_cbs = []
+        for i, (label, callback) in enumerate(buttons.items()):
+            self.plot_infobar.add_button(label, i)
+            self.plot_infobar_cbs.append(callback)
+        self.plot_infobar.show_all()
+        self.plot_infobar.set_revealed(True)
+
+    def plot_infobar_response(self, widget, response):
+        self.plot_infobar.set_revealed(False)
+        if response >= 0:
+            self.plot_infobar_cbs[response]()
 
     def inspect(self, key, obj):
         def make_str(s):
@@ -313,6 +390,7 @@ class BrowserApplication(Gtk.Application):
 
     def do_startup(self):
         Gtk.Application.do_startup(self)
+
 
 if __name__ == "__main__":
     app = BrowserApplication()
