@@ -4,8 +4,8 @@ import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk, Gio
 import os
-import awkward1 as awkward
-import uproot4 as uproot
+import awkward
+import uproot
 import warnings
 with warnings.catch_warnings():
     warnings.simplefilter("ignore")
@@ -182,11 +182,9 @@ class Browser(Gtk.ApplicationWindow):
             self.plot_ax.set_title(obj.all_members["fTitle"])
             canplot = True
         elif obj.classname in ["TH1D", "TH1F", "TH1I", "TH1S", "TH1C"]:
-            # Ignore overflow
-            edges = obj.edges()[1:-1]
-            values, errors = obj.values_errors()
-            values = values[1:-1]
-            errors = errors[1:-1]
+            edges = obj.axis().edges()
+            values = obj.values()
+            errors = obj.variances() ** .5
             centers = (edges[1:] + edges[:-1]) / 2
             widths = (edges[1:] - edges[:-1]) / 2
             self.plot_ax.errorbar(x=centers, y=values, xerr=widths, yerr=errors, linestyle="none")
@@ -195,11 +193,10 @@ class Browser(Gtk.ApplicationWindow):
             self.plot_ax.set_title(obj.all_members["fTitle"])
             canplot = True
         elif obj.classname in ["TH2D", "TH2F", "TH2I", "TH2S", "TH2C"]:
-            # Ignore overflow
-            edgesx = obj.edges(0)[1:-1]
-            edgesy = obj.edges(1)[1:-1]
+            edgesx = obj.axis(0).edges()
+            edgesy = obj.axis(1).edges()
             x, y = np.meshgrid(edgesx, edgesy)
-            values = obj.values()[1:-1, 1:-1]
+            values = obj.values()
             c = self.plot_ax.pcolormesh(x, y, values.T)
             self.plot_ax.set_xlabel(obj.all_members["fXaxis"].all_members["fTitle"])
             self.plot_ax.set_ylabel(obj.all_members["fYaxis"].all_members["fTitle"])
