@@ -1,8 +1,5 @@
 #!/usr/bin/env python3
 
-import gi
-gi.require_version("Gtk", "3.0")
-from gi.repository import Gtk, Gio, Gdk
 import os
 import threading
 from functools import partial
@@ -20,6 +17,9 @@ from matplotlib.figure import Figure
 import numpy as np
 import sys
 from collections import Mapping
+import gi
+gi.require_version("Gtk", "3.0")
+from gi.repository import Gtk, Gio, Gdk  # noqa: E402
 
 
 class Browser(Gtk.ApplicationWindow):
