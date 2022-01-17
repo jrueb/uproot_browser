@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import os
+import time
 import threading
 from functools import partial
 import queue
@@ -19,7 +20,7 @@ import sys
 from collections import Mapping
 import gi
 gi.require_version("Gtk", "3.0")
-from gi.repository import Gtk, Gio, Gdk  # noqa: E402
+from gi.repository import Gtk, Gio, Gdk, GLib  # noqa: E402
 
 
 class Browser(Gtk.ApplicationWindow):
@@ -63,10 +64,13 @@ class Browser(Gtk.ApplicationWindow):
         self.filter = self.store.filter_new()
         self.paths_to_expand = []
         self.filter.set_visible_column(self.COL_VISIBLE)
-        self.filter_entry = Gtk.Entry()
+        self.filter_entry = Gtk.SearchEntry()
         self.filter_entry.set_tooltip_text("Search for a specific key")
         self.filter_entry.set_placeholder_text("Filter")
+        self.filter_needs_update = False
+        self.filter_last_update = time.time()
         self.filter_entry.connect("changed", self.on_filter_entry_changed)
+        GLib.timeout_add(250, self.update_filter)
         box.pack_start(self.filter_entry, False, False, 0)
 
         scroll = Gtk.ScrolledWindow()
@@ -127,10 +131,18 @@ class Browser(Gtk.ApplicationWindow):
         self.open()
 
     def on_filter_entry_changed(self, editable):
+        self.filter_last_update = time.time()
+        self.filter_needs_update = True
+
+    def update_filter(self):
+        if not self.filter_needs_update or time.time() - self.filter_last_update < 1:
+            return True
+        self.filter_needs_update = False
         text = self.filter_entry.get_text()
         self.store.foreach(self.apply_filter_on_row, False)
         self.store.foreach(self.apply_filter_on_row, text)
         self.filter.refilter()
+        return True
 
     def apply_filter_on_row(self, model, path, iter, text):
         if text == "" or text is None:
