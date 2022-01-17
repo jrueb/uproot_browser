@@ -171,16 +171,12 @@ class Browser(Gtk.ApplicationWindow):
             raise
 
     def add_dir(self, directory, iter=None):
-        for key in directory.keys(recursive=False):
-            try:
-                obj = directory[key]
-            except ValueError:
-                obj = None
+        for key, classname in directory.iterclassnames(recursive=False):
             piter = self.store.append(iter, [key, True])
-            if isinstance(obj, uproot.ReadOnlyDirectory):
-                self.add_dir(obj, piter)
-            elif hasattr(obj, "classname") and obj.classname == "TTree":
-                self.add_tree(obj, piter)
+            if classname == "TDirectory":
+                self.add_dir(directory[key], piter)
+            elif classname == "TTree":
+                self.add_tree(directory[key], piter)
 
     def add_tree(self, tree, iter):
         for key in tree.keys():
