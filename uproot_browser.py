@@ -77,10 +77,22 @@ class Browser(Gtk.ApplicationWindow):
         scroll.set_size_request(200, -1)
         box.pack_start(scroll, True, True, 0)
 
+        self.treepopup = Gtk.Menu()
+        self.treepopup.plot_item = Gtk.MenuItem("Plot")
+        self.treepopup.plot_item.connect("activate", self.on_popup_plot_item_activated)
+        self.treepopup.append(self.treepopup.plot_item)
+        self.treepopup.plotsame_item = Gtk.MenuItem("Plot in same figure")
+        self.treepopup.plotsame_item.connect("activate", self.on_popup_plotsame_item_activated)
+        self.treepopup.append(self.treepopup.plotsame_item)
+        self.treepopup.inspect_item = Gtk.MenuItem("Inspect")
+        self.treepopup.inspect_item.connect("activate", self.on_popup_inspect_item_activated)
+        self.treepopup.append(self.treepopup.inspect_item)
+
         self.treeview = Gtk.TreeView.new_with_model(self.filter)
         column = Gtk.TreeViewColumn("ROOT file", Gtk.CellRendererText(), text=self.COL_KEY)
         self.treeview.append_column(column)
         self.treeview.connect("row_activated", self.on_row_activated)
+        self.treeview.connect("button-press-event", self.on_button_press_event_tree)
         scroll.add(self.treeview)
 
         self.notebook = Gtk.Notebook()
@@ -165,13 +177,17 @@ class Browser(Gtk.ApplicationWindow):
             self.store.set_value(subtree, self.COL_VISIBLE, True)
             self.make_subtree_visible(model, subtree)
 
-    def on_row_activated(self, tree_view, path, column):
+    def get_full_path(self, path):
         row = self.filter[path]
         key = row[self.COL_KEY]
         full_path = key
         while row.get_parent():
             row = row.get_parent()
             full_path = row[self.COL_KEY] + "/" + full_path
+        return full_path, key
+
+    def on_row_activated(self, tree_view, path, column):
+        full_path, key = self.get_full_path(path)
         try:
             obj = self.file[full_path]
             couldplot = self.plot(obj)
@@ -181,6 +197,45 @@ class Browser(Gtk.ApplicationWindow):
         except ValueError as e:
             self.show_error("Unsupported object", str(e))
             raise
+
+    def get_path_capabilities(self, path):
+        full_path, key = self.get_full_path(path)
+        classname = self.file.classname_of(full_path)
+        plot = classname in (
+            "TGraph", "TGraphErrors", "TGraphAsymmErrors", "TH1D", "TH1F",
+            "TH1I", "TH1S", "TH1C", "TH2D", "TH2F", "TH2I", "TH2S", "TH2C"
+        )
+        plotsame = classname in (
+            "TGraph", "TGraphErrors", "TGraphAsymmErrors", "TH1D", "TH1F",
+            "TH1I", "TH1S", "TH1C"
+        )
+        inspect = True
+
+        return plot, plotsame, inspect
+
+    def on_popup_plot_item_activated(self, menu_item):
+        self.plot(self.file[self.get_full_path(self.treepopup.last_path)[0]])
+        self.notebook.set_current_page(self.PAGE_PLOT)
+
+    def on_popup_plotsame_item_activated(self, menu_item):
+        self.plot(self.file[self.get_full_path(self.treepopup.last_path)[0]], False)
+        self.notebook.set_current_page(self.PAGE_PLOT)
+
+    def on_popup_inspect_item_activated(self, menu_item):
+        full_path, key = self.get_full_path(self.treepopup.last_path)
+        self.inspect(key, self.file[full_path])
+        self.notebook.set_current_page(self.PAGE_INSPECT)
+
+    def on_button_press_event_tree(self, widget, event):
+        if event.type == Gdk.EventType.BUTTON_PRESS and event.button == 3:
+            path = self.treeview.get_path_at_pos(int(event.x), int(event.y))[0]
+            self.treepopup.last_path = path
+            canplot, canplotsame, caninspect = self.get_path_capabilities(path)
+            self.treepopup.plot_item.set_sensitive(canplot)
+            self.treepopup.plotsame_item.set_sensitive(canplotsame)
+            self.treepopup.inspect_item.set_sensitive(caninspect)
+            self.treepopup.popup(None, None, None, None, event.button, event.time)
+            self.treepopup.show_all()
 
     def add_dir(self, directory, iter=None):
         for key, classname in directory.iterclassnames(recursive=False):
@@ -194,10 +249,11 @@ class Browser(Gtk.ApplicationWindow):
         for key in tree.keys():
             self.store.append(iter, [key, True])
 
-    def plot(self, obj):
+    def plot(self, obj, clear=True):
         self.plot_canvas.hide()
         self.plot_spinner.start()
-        self.plot_ax.clear()
+        if clear:
+            self.plot_ax.clear()
         if self.colorbar is not None:
             self.colorbar.remove()
             self.colorbar = None
