@@ -415,7 +415,7 @@ class Browser(Gtk.ApplicationWindow):
             filter.add_pattern("*")
             dialog.add_filter(filter)
             response = dialog.run()
-            if response == Gtk.ResponseType.CANCEL:
+            if response in (Gtk.ResponseType.CANCEL, Gtk.ResponseType.DELETE_EVENT):
                 dialog.destroy()
                 return
             path = dialog.get_filename()
