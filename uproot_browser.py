@@ -17,7 +17,7 @@ from matplotlib.backends.backend_gtk3 import (
 from matplotlib.figure import Figure
 import numpy as np
 import sys
-from collections import Mapping
+from collections.abc import Mapping
 import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk, Gio, Gdk, GLib  # noqa: E402
@@ -194,20 +194,24 @@ class Browser(Gtk.ApplicationWindow):
             self.inspect(key, obj)
             if not couldplot:
                 self.notebook.set_current_page(self.PAGE_INSPECT)
-        except ValueError as e:
+        except (ValueError, uproot.deserialization.DeserializationError) as e:
             self.show_error("Unsupported object", str(e))
             raise
 
     def get_path_capabilities(self, path):
         full_path, key = self.get_full_path(path)
-        classname = self.file.classname_of(full_path)
+        if self.file.classname_of(full_path.rsplit("/", 1)[0]) == "TTree":
+            classname = "TBranch"
+        else:
+            classname = self.file.classname_of(full_path)
         plot = classname in (
             "TGraph", "TGraphErrors", "TGraphAsymmErrors", "TH1D", "TH1F",
-            "TH1I", "TH1S", "TH1C", "TH2D", "TH2F", "TH2I", "TH2S", "TH2C"
+            "TH1I", "TH1S", "TH1C", "TH2D", "TH2F", "TH2I", "TH2S", "TH2C",
+            "TBranch"
         )
         plotsame = classname in (
             "TGraph", "TGraphErrors", "TGraphAsymmErrors", "TH1D", "TH1F",
-            "TH1I", "TH1S", "TH1C"
+            "TH1I", "TH1S", "TH1C", "TBranch"
         )
         inspect = True
 
